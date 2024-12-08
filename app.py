@@ -1,70 +1,161 @@
+import csv
 import os
-import pandas as pd
 import random
-from flask import Flask
 import time
+from datetime import datetime
+import psycopg2
 
+from flask import Flask, render_template_string, jsonify
+from flask_cors import CORS
+
+# Flask app setup
 app = Flask(__name__)
+CORS(app)
 
-# Define the path to the CSV file
-CSV_FILE_PATH = os.path.join(os.path.dirname(__file__), "1.csv")
-GENERATION_INTERVAL = 2  # 2 seconds
+# Constants 
+UPLOAD_INTERVAL = 4  # 20 seconds
+CSV_FILE_PATH = 'one.csv'
+CONNECTION_STRING = "postgresql://koyebdb_owner:tM6lmGPdJ1yQ@ep-shrill-mountain-a27t8n7h.eu-central-1.aws.neon.tech/koyebdb?sslmode=require"
 
-# Global variable to track last generation time
-last_generation_time = 0
+# Utility functions
+def create_csv_if_not_exists():
+    """Create CSV file with header if it doesn't exist"""
+    if not os.path.exists(CSV_FILE_PATH):
+        print('CSV file not found, creating a new one...')
+        header = ['column1', 'column2', 'timestamp']
+        with open(CSV_FILE_PATH, 'w', newline='', encoding='utf-8') as file:
+            writer = csv.DictWriter(file, fieldnames=header)
+            writer.writeheader()
+        print('New CSV file created with header.')
 
-def generate_data():
-    """Generate sample financial data"""
+def generate_random_data():
+    """Generate a random data record"""
     return {
-        'Timestamp': time.time(),
-        'Open': random.uniform(100, 120),
-        'High': random.uniform(105, 125),
-        'Low': random.uniform(90, 105),
-        'Close': random.uniform(100, 115)
+        'column1': random.randint(0, 1000),
+        'column2': f"Value-{random.randint(0, 100)}",
+        'timestamp': datetime.now().isoformat()
     }
 
-def ensure_fresh_data():
-    """Ensure CSV is appended with new data"""
-    global last_generation_time
-    current_time = time.time()
-    
-    # Check if it's time to generate new data
-    if current_time - last_generation_time >= GENERATION_INTERVAL:
-        # Create a new DataFrame with a single row of data
-        new_data = pd.DataFrame([generate_data()])
-        
-        # Check if CSV exists
-        if os.path.exists(CSV_FILE_PATH):
-            # Append to existing CSV
-            new_data.to_csv(CSV_FILE_PATH, mode='a', header=False, index=False)
-        else:
-            # Create new CSV with headers
-            new_data.to_csv(CSV_FILE_PATH, index=False)
-        
-        # Update last generation time
-        last_generation_time = current_time
+def read_csv():
+    """Read and return CSV records"""
+    if os.path.exists(CSV_FILE_PATH):
+        with open(CSV_FILE_PATH, 'r', newline='', encoding='utf-8') as file:
+            reader = csv.DictReader(file)
+            return list(reader)
+    return []
 
+def update_csv():
+    """Update CSV with new random data"""
+    try:
+        create_csv_if_not_exists()
+
+        # Read existing data
+        records = read_csv()
+
+        # Generate and add new row
+        new_record = generate_random_data()
+        records.append(new_record)
+
+        # Write updated records to CSV
+        with open(CSV_FILE_PATH, 'w', newline='', encoding='utf-8') as file:
+            fieldnames = ['column1', 'column2', 'timestamp']
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(records)
+
+        print('CSV file updated with new row:', new_record)
+        return records
+    except Exception as error:
+        print('Error updating CSV:', error)
+        raise error
+
+def upload_csv_to_db(latest_record):
+    """Upload latest record to PostgreSQL database"""
+    try:
+        conn = psycopg2.connect(CONNECTION_STRING)
+        cursor = conn.cursor()
+
+        print(f"Uploading the latest record: {latest_record}")
+
+        # Insert the latest record into the database
+        insert_query = """
+            INSERT INTO your_table (column1, column2, timestamp)
+            VALUES (%s, %s, %s);
+        """
+        cursor.execute(insert_query, (
+            latest_record['column1'], 
+            latest_record['column2'], 
+            latest_record['timestamp']
+        ))
+        conn.commit()
+
+        print('New data successfully uploaded to the database.')
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        print('Error uploading data to the database:', error)
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+def periodic_task():
+    """Perform periodic CSV update and database upload"""
+    while True:
+        try:
+            record = update_csv()
+            latest_record = record[-1]
+            upload_csv_to_db(latest_record)
+            print(f"Latest record: {latest_record}")
+            time.sleep(UPLOAD_INTERVAL)
+        except Exception as e:
+            print(f"Error in periodic task: {e}")
+            time.sleep(UPLOAD_INTERVAL)
+
+# Web routes
 @app.route('/')
-def hello_world():
-    """Route to display CSV contents"""
-    # Ensure fresh data is generated
-    ensure_fresh_data()
-    
-    # Read and display the CSV
-    try:
-        df = pd.read_csv(CSV_FILE_PATH)
-        return df.to_html()
-    except Exception as e:
-        return f"Error reading CSV: {str(e)}"
+def index():
+    """Render CSV data in an HTML table"""
+    records = read_csv()
+    template = """
+    <html>
+    <table border="1">
+        <thead>
+            <tr>
+                <th>Column 1</th>
+                <th>Column 2</th>
+                <th>Timestamp</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for record in records %}
+            <tr>
+                <td>{{ record.column1 }}</td>
+                <td>{{ record.column2 }}</td>
+                <td>{{ record.timestamp }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </html>
+    """
+    return render_template_string(template, records=records)
 
-@app.route('/rows')
-def get_row_count():
-    """Route to get number of rows in CSV"""
-    try:
-        df = pd.read_csv(CSV_FILE_PATH)
-        return f"Total rows: {len(df)}"
-    except Exception as e:
-        return f"Error counting rows: {str(e)}"
+@app.route('/csv_data')
+def csv_data():
+    """Return CSV data as JSON"""
+    records = read_csv()
+    return jsonify(records)
 
-if __name__ == "__main__":
-    app.run(debug=True)
+# Gunicorn-friendly initialization
+def start_background_thread():
+    """Start background thread for periodic tasks"""
+    import threading
+    thread = threading.Thread(target=periodic_task, daemon=True)
+    thread.start()
+    return thread
+
+# Initialize background thread when the app is imported
+start_background_thread()
+
