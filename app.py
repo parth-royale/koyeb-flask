@@ -1,31 +1,33 @@
-import os
-import random
-import time
-import csv
+
+
+import csv, time
+import os, random
 from datetime import datetime
-from flask import Flask, render_template_string, jsonify
 import psycopg2
+
 from threading import Thread
+from flask_cors import CORS
+from flask import Flask, render_template_string, jsonify
 
 # Flask app setup
 app = Flask(__name__)
 
+# Enable CORS for the entire app
+
+# Restrict CORS if Needed (Optional): If you want to restrict access to specific origins, you can specify the allowed origins:
+
+# CORS(app, resources={r"/csv_data": {"origins": "http://your-allowed-origin.com"}})
+
+CORS(app)
 
 
-# File path for CSV
+# Constants 
+upload_interval = 20  # 30 seconds
 csv_file_path = 'one.csv'
 
-# Time interval for uploads (in seconds)
-upload_interval = 30  # 30 seconds
 
-# Generate random data for new rows
-def generate_random_data():
-    return {
-        'column1': random.randint(0, 1000),
-        'column2': f"Value-{random.randint(0, 100)}",
-        'timestamp': datetime.now().isoformat()
-    }
 
+# util0
 # Check if CSV file exists, if not, create it with a header
 def create_csv_if_not_exists():
     if not os.path.exists(csv_file_path):
@@ -36,6 +38,18 @@ def create_csv_if_not_exists():
             writer.writeheader()
         print('New CSV file created with header.')
 
+
+# util1 
+# Generate random data for new rows
+def generate_random_data():
+    return {
+        'column1': random.randint(0, 1000),
+        'column2': f"Value-{random.randint(0, 100)}",
+        'timestamp': datetime.now().isoformat()
+    }
+
+
+#util2
 # Read CSV file and return the records
 def read_csv():
     if os.path.exists(csv_file_path):
@@ -43,6 +57,9 @@ def read_csv():
             reader = csv.DictReader(file)
             return list(reader)
     return []
+
+
+# util3
 
 # Update CSV with new data
 def update_csv():
@@ -69,21 +86,22 @@ def update_csv():
     except Exception as error:
         print('Error updating CSV:', error)
         raise error
+    
 
-  
+
 # Connect using the connection string
 connection_string = "postgresql://koyebdb_owner:tM6lmGPdJ1yQ@ep-shrill-mountain-a27t8n7h.eu-central-1.aws.neon.tech/koyebdb?sslmode=require"
 
 # Upload the latest CSV record to the database
-def upload_csv_to_db():
+def upload_csv_to_db(latest_record):
     conn = psycopg2.connect(connection_string)
     cursor = conn.cursor()
     try:
-        # Read and update the CSV first
-        records = update_csv()
+        # # Read and update the CSV first
+        # records = update_csv()
 
-        # Get the latest record
-        latest_record = records[-1]
+        # # Get the latest record
+        # latest_record = records[-1]
         print(f"Uploading the latest record: {latest_record}")
 
         # Insert the latest record into the database
@@ -102,22 +120,89 @@ def upload_csv_to_db():
         cursor.close()
         conn.close()
 
-# Run the periodic upload in the background using a thread
 def run_periodic_upload():
-    while True:
-        upload_csv_to_db()
+    while True:    
+        record = update_csv()
+        latest_record = record[-1]
+        upload_csv_to_db(latest_record)
+        print(f"the latest record: {latest_record}###########################")
         time.sleep(upload_interval)
 
-# Start the periodic upload in a separate thread (directly in the main block)
+
 def start_periodic_upload_thread():
     thread = Thread(target=run_periodic_upload)
     thread.daemon = True
     thread.start()
 
+
+# Flask routes 
+# HTML template to display the current CSV and upload status
+templat = """
+
+<html>
+
+<table border="1">
+    <thead>
+        <tr>
+            <th>Column 1</th>
+            <th>Column 2</th>
+            <th>Timestamp</th>
+        </tr>
+    </thead>
+    <tbody id="csv-table-body">
+        <!-- CSV data will be dynamically populated here -->
+    </tbody>
+</table>
+
+
+<script>
+    // Function to update the table with the latest CSV data
+    function fetchCSVData() {
+    fetch('http://127.0.0.1:5000/csv_data')
+        .then(response => response.json())
+        .then(data => {
+            let tableBody = document.getElementById("csv-table-body");
+            tableBody.innerHTML = ""; // Clear existing table rows
+            data.forEach(record => {
+                let row = document.createElement("tr");
+
+                // Create cells for each column
+                let col1 = document.createElement("td");
+                col1.textContent = record.column1;
+
+                let col2 = document.createElement("td");
+                col2.textContent = record.column2;
+
+                let timestamp = document.createElement("td");
+                timestamp.textContent = record.timestamp;
+
+                // Append cells to the row
+                row.appendChild(col1);
+                row.appendChild(col2);
+                row.appendChild(timestamp);
+
+                // Append the row to the table body
+                tableBody.appendChild(row);
+            });
+        });
+}
+
+// Fetch and update CSV data every 20 seconds
+setInterval(fetchCSVData, 20000);
+
+// Initial fetch to populate data on page load
+fetchCSVData();
+</script>
+
+</html>
+
+"""
+
 # Web route to display the status of the CSV and database upload
 @app.route('/')
 def index():
-    return render_template_string(templat , upload_interval=upload_interval)
+    return render_template_string(templat )
+
 
 # Route to fetch the current CSV data and display in the table
 @app.route('/csv_data')
@@ -126,67 +211,18 @@ def csv_data():
     records = read_csv()
     return jsonify(records)
 
-# HTML template to display the current CSV and upload status
-templat = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CSV Upload Status</title>
-    <script>
-        // Function to update the table with the latest CSV data
-        function fetchCSVData() {
-            fetch('/csv_data')
-                .then(response => response.json())
-                .then(data => {
-                    let tableBody = document.getElementById("csv-table-body");
-                    tableBody.innerHTML = "";
-                    data.forEach(record => {
-                        let row = document.createElement("tr");
-                        let col1 = document.createElement("td");
-                        col1.textContent = record.column1;
-                        let col2 = document.createElement("td");
-                        col2.textContent = record.column2;
-                        let timestamp = document.createElement("td");
-                        timestamp.textContent = record.timestamp;
-                        row.appendChild(col1);
-                        row.appendChild(col2);
-                        row.appendChild(timestamp);
-                        tableBody.appendChild(row);
-                    });
-                });
-        }
 
-        // Fetch and update CSV data every 30 seconds
-        setInterval(fetchCSVData, 30000);
-    </script>
-</head>
-<body>
-    <h1>CSV Upload Status</h1>
-    <p>Data is being uploaded every {{ upload_interval }} seconds.</p>
-    <p>Check your PostgreSQL database for the latest uploaded data.</p>
 
-    <h2>Current CSV Data:</h2>
-    <table border="1">
-        <thead>
-            <tr>
-                <th>Column 1</th>
-                <th>Column 2</th>
-                <th>Timestamp</th>
-            </tr>
-        </thead>
-        <tbody id="csv-table-body">
-            <!-- CSV data will be populated here -->
-        </tbody>
-    </table>
-</body>
-</html>
-"""
+
+# main blcok 
+
+
 
 if __name__ == "__main__":
     # Start the periodic upload in the background thread before running the Flask app
     start_periodic_upload_thread()
 
     # Run the Flask app
-    app.run(debug=True)
+    app.run(debug=False)
+
+
