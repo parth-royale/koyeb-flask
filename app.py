@@ -135,73 +135,39 @@ def start_periodic_upload_thread():
     thread.start()
 
 
-# Flask routes 
-# HTML template to display the current CSV and upload status
-templat = """
-
-<html>
-
-<table border="1">
-    <thead>
-        <tr>
-            <th>Column 1</th>
-            <th>Column 2</th>
-            <th>Timestamp</th>
-        </tr>
-    </thead>
-    <tbody id="csv-table-body">
-        <!-- CSV data will be dynamically populated here -->
-    </tbody>
-</table>
 
 
-<script>
-    // Function to update the table with the latest CSV data
-    function fetchCSVData() {
-    fetch('http://127.0.0.1:5000/csv_data')
-        .then(response => response.json())
-        .then(data => {
-            let tableBody = document.getElementById("csv-table-body");
-            tableBody.innerHTML = ""; // Clear existing table rows
-            data.forEach(record => {
-                let row = document.createElement("tr");
-
-                // Create cells for each column
-                let col1 = document.createElement("td");
-                col1.textContent = record.column1;
-
-                let col2 = document.createElement("td");
-                col2.textContent = record.column2;
-
-                let timestamp = document.createElement("td");
-                timestamp.textContent = record.timestamp;
-
-                // Append cells to the row
-                row.appendChild(col1);
-                row.appendChild(col2);
-                row.appendChild(timestamp);
-
-                // Append the row to the table body
-                tableBody.appendChild(row);
-            });
-        });
-}
-
-// Fetch and update CSV data every 20 seconds
-setInterval(fetchCSVData, 20000);
-
-// Initial fetch to populate data on page load
-fetchCSVData();
-</script>
-
-</html>
-
-"""
 
 # Web route to display the status of the CSV and database upload
 @app.route('/')
 def index():
-    return render_template_string(templat )
+    # Read the CSV data to pass to the template
+    records = read_csv()
+    # Define the template inline
+    template = """
+    <html>
+    <table border="1">
+        <thead>
+            <tr>
+                <th>Column 1</th>
+                <th>Column 2</th>
+                <th>Timestamp</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for record in records %}
+            <tr>
+                <td>{{ record.column1 }}</td>
+                <td>{{ record.column2 }}</td>
+                <td>{{ record.timestamp }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </html>
+    """
+    return render_template_string(template, records=records)
+
 
 
 # Route to fetch the current CSV data and display in the table
