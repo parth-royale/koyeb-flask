@@ -1,106 +1,161 @@
-# from flask import Flask
-# import pandas as pd
-# import os
-
-# app = Flask(__name__)
-
-# # Define the path to the CSV file
-# csv_file_path = os.path.join(os.path.dirname(__file__), "1.csv")
-
-# @app.route('/')
-# def hello_world():
-#     # Check if CSV file exists; if not, display a message
-#     if not os.path.exists(csv_file_path):
-#         return "No CSV generated yet"
-    
-#     # Read the CSV file and display its content as HTML
-#     df = pd.read_csv(csv_file_path)
-#     return df.to_html()
-
-# @app.route('/dfx')
-# def generate_csv():
-#     # Create the CSV file with sample data
-#     data = {
-#         'Open': [100, 110],
-#         'High': [105, 115],
-#         'Low': [95, 105],
-#         'Close': [102, 112]
-#     }
-#     df = pd.DataFrame(data)
-#     df.to_csv(csv_file_path, index=False)
-#     return "CSV file '1.csv' has been created with sample data."
-
-# if __name__ == "__main__":
-#     app.run()
-
-
-from flask import Flask, request, jsonify
-import platform
+import csv
+import os
+import random
+import time
 from datetime import datetime
-import user_agents
+import psycopg2
 
+from flask import Flask, render_template_string, jsonify
+from flask_cors import CORS
+
+# Flask app setup
 app = Flask(__name__)
+CORS(app)
 
-def get_client_info():
-    """Get detailed client information from the request"""
-    # Get IP addresses
-    client_ip = request.remote_addr
-    forwarded_for = request.headers.get('X-Forwarded-For', 'Not available')
-    real_ip = request.headers.get('X-Real-IP', 'Not available')
-    
-    # Get User Agent information
-    user_agent_string = request.headers.get('User-Agent', 'Unknown')
-    user_agent = user_agents.parse(user_agent_string)
-    
-    # Get additional headers
-    headers = dict(request.headers)
-    
-    # Create client info dictionary
-    client_info = {
-        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'ip_addresses': {
-            'direct_client_ip': client_ip,
-            'x_forwarded_for': forwarded_for,
-            'x_real_ip': real_ip
-        },
-        'browser_info': {
-            'browser_family': user_agent.browser.family,
-            'browser_version': user_agent.browser.version_string,
-            'os': user_agent.os.family,
-            'os_version': user_agent.os.version_string,
-            'device': user_agent.device.family,
-            'is_mobile': user_agent.is_mobile,
-            'is_tablet': user_agent.is_tablet,
-            'is_pc': user_agent.is_pc,
-            'is_bot': user_agent.is_bot
-        },
-        'request_info': {
-            'method': request.method,
-            'path': request.path,
-            'protocol': request.scheme,
-            'host': request.host,
-        },
-        'headers': headers
+# Constants 
+UPLOAD_INTERVAL = 4  # 20 seconds
+CSV_FILE_PATH = 'one.csv'
+CONNECTION_STRING = "postgresql://koyebdb_owner:tM6lmGPdJ1yQ@ep-shrill-mountain-a27t8n7h.eu-central-1.aws.neon.tech/koyebdb?sslmode=require"
+
+# Utility functions
+def create_csv_if_not_exists():
+    """Create CSV file with header if it doesn't exist"""
+    if not os.path.exists(CSV_FILE_PATH):
+        print('CSV file not found, creating a new one...')
+        header = ['column1', 'column2', 'timestamp']
+        with open(CSV_FILE_PATH, 'w', newline='', encoding='utf-8') as file:
+            writer = csv.DictWriter(file, fieldnames=header)
+            writer.writeheader()
+        print('New CSV file created with header.')
+
+def generate_random_data():
+    """Generate a random data record"""
+    return {
+        'column1': random.randint(0, 1000),
+        'column2': f"Value-{random.randint(0, 100)}",
+        'timestamp': datetime.now().isoformat()
     }
-    
-    return client_info
 
+def read_csv():
+    """Read and return CSV records"""
+    if os.path.exists(CSV_FILE_PATH):
+        with open(CSV_FILE_PATH, 'r', newline='', encoding='utf-8') as file:
+            reader = csv.DictReader(file)
+            return list(reader)
+    return []
+
+def update_csv():
+    """Update CSV with new random data"""
+    try:
+        create_csv_if_not_exists()
+
+        # Read existing data
+        records = read_csv()
+
+        # Generate and add new row
+        new_record = generate_random_data()
+        records.append(new_record)
+
+        # Write updated records to CSV
+        with open(CSV_FILE_PATH, 'w', newline='', encoding='utf-8') as file:
+            fieldnames = ['column1', 'column2', 'timestamp']
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(records)
+
+        print('CSV file updated with new row:', new_record)
+        return records
+    except Exception as error:
+        print('Error updating CSV:', error)
+        raise error
+
+def upload_csv_to_db(latest_record):
+    """Upload latest record to PostgreSQL database"""
+    try:
+        conn = psycopg2.connect(CONNECTION_STRING)
+        cursor = conn.cursor()
+
+        print(f"Uploading the latest record: {latest_record}")
+
+        # Insert the latest record into the database
+        insert_query = """
+            INSERT INTO your_table (column1, column2, timestamp)
+            VALUES (%s, %s, %s);
+        """
+        cursor.execute(insert_query, (
+            latest_record['column1'], 
+            latest_record['column2'], 
+            latest_record['timestamp']
+        ))
+        conn.commit()
+
+        print('New data successfully uploaded to the database.')
+    except Exception as error:
+        if conn:
+            conn.rollback()
+        print('Error uploading data to the database:', error)
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+def periodic_task():
+    """Perform periodic CSV update and database upload"""
+    while True:
+        try:
+            record = update_csv()
+            latest_record = record[-1]
+            upload_csv_to_db(latest_record)
+            print(f"Latest record: {latest_record}")
+            time.sleep(UPLOAD_INTERVAL)
+        except Exception as e:
+            print(f"Error in periodic task: {e}")
+            time.sleep(UPLOAD_INTERVAL)
+
+# Web routes
 @app.route('/')
 def index():
-    """Display client information in a formatted JSON response"""
-    client_info = get_client_info()
-    return jsonify(client_info)
+    """Render CSV data in an HTML table"""
+    records = read_csv()
+    template = """
+    <html>
+    <table border="1">
+        <thead>
+            <tr>
+                <th>Column 1</th>
+                <th>Column 2</th>
+                <th>Timestamp</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for record in records %}
+            <tr>
+                <td>{{ record.column1 }}</td>
+                <td>{{ record.column2 }}</td>
+                <td>{{ record.timestamp }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </html>
+    """
+    return render_template_string(template, records=records)
 
-@app.route('/raw')
-def raw_info():
-    """Display raw request information"""
-    return {
-        'environ': str(request.environ),
-        'headers': dict(request.headers)
-    }
+@app.route('/csv_data')
+def csv_data():
+    """Return CSV data as JSON"""
+    records = read_csv()
+    return jsonify(records)
 
-# if __name__ == '__main__':
-#     app.run(host='0.0.0.0', port=5000, debug=True)
-if __name__ == "__main__":
-    app.run()
+# Gunicorn-friendly initialization
+def start_background_thread():
+    """Start background thread for periodic tasks"""
+    import threading
+    thread = threading.Thread(target=periodic_task, daemon=True)
+    thread.start()
+    return thread
+
+# Initialize background thread when the app is imported
+start_background_thread()
 
