@@ -15,7 +15,8 @@ CORS(app)
 # Constants 
 UPLOAD_INTERVAL = 4  # 20 seconds
 CSV_FILE_PATH = 'one.csv'
-CONNECTION_STRING = "postgresql://koyebdb_owner:tM6lmGPdJ1yQ@ep-shrill-mountain-a27t8n7h.eu-central-1.aws.neon.tech/koyebdb?sslmode=require"
+CONNECTION_STRING = "postgresql://neondb_owner:p3wABei1NrGQ@ep-aged-dawn-a96td1sk.gwc.azure.neon.tech/neondb?sslmode=require"
+# "postgresql://koyebdb_owner:tM6lmGPdJ1yQ@ep-shrill-mountain-a27t8n7h.eu-central-1.aws.neon.tech/koyebdb?sslmode=require"
 
 # Utility functions
 def create_csv_if_not_exists():
